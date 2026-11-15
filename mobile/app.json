@@ -1,0 +1,68 @@
+{
+  "expo": {
+    "name": "IRL Engine",
+    "slug": "irl-engine",
+    "scheme": "irlengine",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0B0D10",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.irlengine.app",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "IRL Engine talks to the chess server on your computer over Wi-Fi.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.irlengine.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#0B0D10",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "17.0"
+          }
+        }
+      ],
+      [
+        "expo-meta-wearables-dat",
+        {
+          "urlScheme": "irlengine",
+          "bluetoothUsageDescription": "IRL Engine connects to your Meta glasses over Bluetooth to take photos of the chessboard."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Test mode uses the phone camera in place of the glasses camera.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": false
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "enableBackgroundPlayback": false
+        }
+      ],
+      "expo-secure-store"
+    ]
+  }
+}
