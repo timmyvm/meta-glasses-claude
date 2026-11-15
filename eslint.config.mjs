@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Vendored Stockfish build copied from node_modules.
     "public/stockfish/**",
+    // The Expo iPhone app has its own toolchain and config.
+    "mobile/**",
   ]),
 ]);
 

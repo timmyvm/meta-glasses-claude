@@ -68,11 +68,13 @@ Use **Test voice** to check that you hear "Knight F3" through the glasses.
 ## How it decides when to speak
 
 - **Auto-watch** grabs a small thumbnail every 400 ms. Once the picture has been still for about a second, and looks different from the last board it read, it sends one frame to Claude.
-- Every new board is compared with the last one by trying every legal move (and every pair of moves, in case one was missed). That way the app knows who moved, and it keeps castling rights and en passant correct.
+- **The first read is a full read:** Claude names every piece. That sets up the game.
+- **After that, it only asks which squares hold a light piece, a dark piece, or nothing.** That's far easier to see in a soft photo than telling a knight from a bishop. The app then tries every legal move (and every pair of moves, in case one was missed) and picks the one that fits. One or two misread squares are tolerated. It also keeps castling rights and en passant correct.
+- **A move only counts once two reads in a row agree on it.** That filters out misreads and hands mid-move. The second look happens about a second after the first.
   - **Opponent moved:** Stockfish thinks, then the move is spoken.
   - **You moved:** it stays quiet.
-  - **The board doesn't follow from a legal move** (a misread, or a hand mid-move): it reads again to confirm before trusting it.
-- **Read board** (Space) forces a read and a suggestion. **Say again** (R) repeats the last move.
+- **Lost track:** after 3 reads in a row that fit no legal move, it says "Lost track of the board" out loud and does a full read next time to resync.
+- **Read board** (Space) forces a read and accepts a move on one read. **Say again** (R) repeats the last move.
 
 ## Settings worth knowing
 
@@ -89,21 +91,31 @@ Use **Test voice** to check that you hear "Knight F3" through the glasses.
 
 | File | Job |
 | --- | --- |
-| `src/app/api/read-board/route.ts` | Sends a frame to Claude with a JSON schema and returns 8 rows of the board as seen in the image |
-| `src/lib/board.ts` | Turns rows into a FEN based on the viewer's side, finds the move that happened, decides whose turn it is |
+| `src/app/api/read-board/route.ts` | Browser app's board read: one frame in, 8 rows out (full or occupancy mode) |
+| `src/app/api/step/route.ts` | Phone app's endpoint: photo in, what to say out (gate, read, track, Stockfish). Contract in `src/lib/step-api.ts` |
+| `src/lib/server/reader.ts` | The Claude call, prompts and JSON schemas for both read modes |
+| `src/lib/server/stockfish.ts` | Stockfish running on the server for the phone app |
+| `src/lib/server/gate.ts` | Skips phone photos that look unchanged, so they cost nothing |
+| `src/lib/tracker.ts` | The game tracker shared by browser and phone: read modes, two-read confirmation, lost track |
+| `src/lib/board.ts` | Rows to FEN, occupancy matching against legal moves, turn logic |
 | `src/lib/engine.ts` | Small UCI wrapper around Stockfish running in a Web Worker |
 | `src/lib/speech.ts` | Converts SAN to speech-friendly text (`Nbd2` → "Knight B, D2") and speaks it |
 | `src/lib/frames.ts` | Frame capture, cropping, motion detection, and a background-safe ticker |
 | `src/components/Coach.tsx` | The app: sources, auto-watch loop, state, UI |
 
 ```bash
-npm test        # unit tests for board logic and speech
+npm test        # unit tests for board logic, tracker and speech
 npm run build
 ```
 
+## iPhone app (no laptop, no WhatsApp)
+
+`mobile/` is an Expo app that connects to the glasses through Meta's Wearables Device Access Toolkit. It takes a sharp photo every few seconds and sends it to `/api/step` on this server. The reply is spoken into the glasses, since they're the phone's Bluetooth headphones. Setup is in [`mobile/README.md`](mobile/README.md).
+
+For the phone to reach the server, deploy this app (for example on Vercel), or run `npm run dev -- -H 0.0.0.0` and use your PC's address on the same Wi-Fi. **Before putting the server on the internet, set `APP_TOKEN`** in its environment to a long random string, and enter the same token in the phone app (and under Advanced in the web app). Without it, anyone who finds the URL can spend your Claude credits.
+
 ## Ideas for v2
 
-- **Native glasses app:** Meta's Wearables Device Access Toolkit gives an iOS/Android app direct access to the glasses camera and speakers. That would replace the video call hack and cut latency.
 - **Local board detector:** a small on-device model (board corners + square classifier) for instant reads, with Claude as a fallback when it's unsure.
 - **Voice trigger:** say "move?" and the app hears it through the call audio.
 

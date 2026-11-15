@@ -3,15 +3,11 @@
  * The engine files are copied into /public/stockfish by scripts/copy-stockfish.mjs.
  */
 
-export const ENGINE_URL = "/stockfish/stockfish-19-lite-single.js";
+import { applyInfoLine, emptyAnalysis, parseBestmove, type Analysis } from "./uci";
 
-export type Analysis = {
-  bestmove: string | null; // UCI, e.g. "g1f3"; null when there are no legal moves
-  depth: number;
-  scoreCp?: number; // centipawns from the side-to-move's point of view
-  mate?: number; // moves to mate (negative = side to move gets mated)
-  pv: string[];
-};
+export type { Analysis } from "./uci";
+
+export const ENGINE_URL = "/stockfish/stockfish-19-lite-single.js";
 
 type LineHandler = (line: string) => void;
 
@@ -63,29 +59,15 @@ export class Engine {
 
     const run = async (): Promise<Analysis> => {
       this.searching = true;
-      const result: Analysis = { bestmove: null, depth: 0, pv: [] };
-
-      const onInfo: LineHandler = (line) => {
-        if (!line.startsWith("info ") || !line.includes(" pv ")) return;
-        if (/ multipv (?!1 )\d+/.test(line)) return;
-        if (/ (lowerbound|upperbound)/.test(line)) return;
-        const depth = Number(line.match(/ depth (\d+)/)?.[1] ?? 0);
-        if (depth < result.depth) return;
-        result.depth = depth;
-        const cp = line.match(/ score cp (-?\d+)/);
-        const mate = line.match(/ score mate (-?\d+)/);
-        result.scoreCp = cp ? Number(cp[1]) : undefined;
-        result.mate = mate ? Number(mate[1]) : undefined;
-        result.pv = line.split(" pv ")[1].trim().split(/\s+/);
-      };
-
+      const result = emptyAnalysis();
       this.send(`position fen ${fen}`);
       this.send(`go movetime ${Math.round(movetimeMs)}`);
-      const done = await this.waitFor((l) => l.startsWith("bestmove"), onInfo);
+      const done = await this.waitFor(
+        (l) => l.startsWith("bestmove"),
+        (l) => applyInfoLine(result, l),
+      );
       this.searching = false;
-
-      const best = done.split(/\s+/)[1];
-      result.bestmove = best && best !== "(none)" ? best : null;
+      result.bestmove = parseBestmove(done);
       return result;
     };
 

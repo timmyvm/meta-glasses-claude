@@ -4,16 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { BoardView } from "@/components/BoardView";
 import { VideoPanel } from "@/components/VideoPanel";
 import type { ReadBoardResponse, ReadEffort } from "@/lib/api-types";
-import {
-  decide,
-  gameStatus,
-  placementOf,
-  pvToSan,
-  rowsToPlacement,
-  turnOf,
-  uciToSan,
-  type Side,
-} from "@/lib/board";
+import { gameStatus, placementOf, pvToSan, turnOf, uciToSan, type Side } from "@/lib/board";
 import { Engine } from "@/lib/engine";
 import {
   changedFraction,
@@ -25,6 +16,7 @@ import {
   type Roi,
 } from "@/lib/frames";
 import { describeScore, sanToSpeech, speak, speechSupported } from "@/lib/speech";
+import { NEW_GAME, readModeFor, trackStep, type Observation, type TrackerState } from "@/lib/tracker";
 
 // ---------- settings ----------
 
@@ -38,6 +30,7 @@ type Prefs = {
   movetime: number; // ms of Stockfish thinking
   minGap: number; // seconds between automatic reads
   rotated: boolean;
+  token: string; // server APP_TOKEN, only needed when the server sets one
 };
 
 const DEFAULT_PREFS: Prefs = {
@@ -50,6 +43,7 @@ const DEFAULT_PREFS: Prefs = {
   movetime: 1500,
   minGap: 4,
   rotated: false,
+  token: "",
 };
 
 const PREFS_KEY = "irl-engine:prefs";
@@ -70,6 +64,7 @@ const TICK_MS = 400;
 const MOTION_LIMIT = 0.02; // >2% of thumbnail pixels changing = camera/hand moving
 const STABLE_MS = 900; // must be still this long
 const CHANGE_MIN = 0.004; // vs. last read frame, else assume nothing happened
+const CONFIRM_GAP_MS = 1200; // second look at a move we just saw, before committing it
 
 // ---------- types ----------
 
@@ -99,7 +94,6 @@ export default function Coach() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [engineReady, setEngineReady] = useState(false);
   const [gameFen, setGameFen] = useState<string | null>(null);
-  const [seen, setSeen] = useState<string | null>(null);
   const [lastMove, setLastMove] = useState<{ from: string; to: string } | null>(null);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const [lastRead, setLastRead] = useState<{ ms: number; confidence: string; model: string } | null>(null);
@@ -112,13 +106,13 @@ export default function Coach() {
   const roiRef = useRef<Roi | null>(null);
   const sourceRef = useRef<FrameSource | null>(null);
   const engineRef = useRef<Engine | null>(null);
-  const gameFenRef = useRef<string | null>(null);
+  const trackerRef = useRef<TrackerState>(NEW_GAME);
   const busyRef = useRef(false);
   const seqRef = useRef(0);
   const lastReqAtRef = useRef(0);
   const lastReadSigRef = useRef<Uint8ClampedArray | null>(null);
-  const pendingUnknownRef = useRef<string | null>(null);
   const recheckRef = useRef(false); // let auto-watch re-read even if the picture hasn't changed
+  const fastRecheckRef = useRef(false); // ...and do it soon (confirming a move)
   const queuedManualRef = useRef(false);
   const cropTipShownRef = useRef(false);
   const readBoardRef = useRef<(trigger: "auto" | "manual") => Promise<void>>(async () => {});
@@ -156,9 +150,9 @@ export default function Coach() {
     await speak(text, { voiceURI: p.voiceURI || undefined, rate: p.rate });
   }, []);
 
-  const setGame = useCallback((fen: string | null) => {
-    gameFenRef.current = fen;
-    setGameFen(fen);
+  const setTracker = useCallback((next: TrackerState) => {
+    trackerRef.current = next;
+    setGameFen(next.fen);
   }, []);
 
   // ---------- engine ----------
@@ -242,17 +236,23 @@ export default function Coach() {
       }
       busyRef.current = true;
       recheckRef.current = false;
+      fastRecheckRef.current = false;
       lastReqAtRef.current = performance.now();
       const p = prefsRef.current;
+      // First read (or after losing track): piece types. While tracking: only
+      // light / dark / empty per square, matched against the legal moves.
+      const mode = readModeFor(trackerRef.current);
       setPhase("reading");
 
       try {
         lastReadSigRef.current = signature(src, roiRef.current);
         const frame = grabJpeg(src, roiRef.current);
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (p.token) headers.Authorization = `Bearer ${p.token}`;
         const res = await fetch("/api/read-board", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image: frame.base64, viewer: p.viewer, effort: p.effort }),
+          headers,
+          body: JSON.stringify({ image: frame.base64, viewer: p.viewer, effort: p.effort, mode }),
         });
         const data = (await res.json()) as ReadBoardResponse;
         if (!data.ok) {
@@ -261,60 +261,35 @@ export default function Coach() {
           return;
         }
         setLastRead({ ms: data.ms, confidence: data.confidence, model: data.model });
+
         if (!data.visible) {
-          // Auto reads fail quietly (hands and head turns are normal), except
-          // for one nudge to crop when no crop box is set.
-          const nudge = !roiRef.current && !cropTipShownRef.current;
-          if (trigger === "manual" || nudge) {
-            if (nudge) cropTipShownRef.current = true;
-            const tip = roiRef.current ? "" : " Tip: drag a box around the glasses video so Claude gets a close-up.";
-            addLog("info", `Can't see the board clearly${data.notes ? `: ${data.notes.replace(/\.\s*$/, "")}` : ""}.${tip}`);
+          // One nudge to crop when no crop box is set.
+          if (!roiRef.current && !cropTipShownRef.current && trigger === "auto") {
+            cropTipShownRef.current = true;
+            addLog("info", "Can't see the board clearly. Tip: drag a box around the glasses video so Claude gets a close-up.");
           }
-          return;
         }
+        const obs: Observation = data.visible
+          ? { kind: "rows", mode, rows: data.rows, confidence: data.confidence }
+          : { kind: "unreadable", notes: data.notes };
+        const r = trackStep(trackerRef.current, obs, { viewer: p.viewer, rotated: p.rotated, trigger });
 
-        const parsed = rowsToPlacement(data.rows, p.viewer, p.rotated);
-        if (!parsed.ok) {
-          addLog("warn", `Misread: ${parsed.error}`);
+        setTracker(r.state);
+        for (const l of r.log) addLog(l.level, l.text);
+        if (r.lastMove !== undefined) setLastMove(r.lastMove);
+        if (r.recheck) {
           recheckRef.current = true;
-          return;
+          fastRecheckRef.current = Boolean(r.state.pending || r.state.pendingUnknown);
         }
-        setSeen(parsed.placement);
+        if (r.clearSuggestion) setSuggestion(null);
+        if (r.notice) await say(r.notice);
 
-        const d = decide(gameFenRef.current, parsed.placement, p.viewer, trigger === "manual");
-
-        // A board that doesn't follow from the last one by a legal move is
-        // often a half-finished move or a misread. In auto mode, wait for the
-        // same board twice before believing it.
-        if (d.how === "unknown" && trigger === "auto" && pendingUnknownRef.current !== parsed.placement) {
-          pendingUnknownRef.current = parsed.placement;
-          recheckRef.current = true;
-          addLog("info", "Board changed unexpectedly, double-checking");
-          return;
-        }
-        pendingUnknownRef.current = null;
-
-        const changed = d.how !== "same" || d.fen !== gameFenRef.current;
-        setGame(d.fen);
-        if (d.moves.length) {
-          const m = d.moves[d.moves.length - 1];
-          setLastMove({ from: m.from, to: m.to });
-        } else if (d.how !== "same") {
-          setLastMove(null);
-        }
-        if (changed || trigger === "manual") {
-          addLog(d.how === "unknown" ? "warn" : "info", `${d.note}${data.confidence !== "high" ? ` (${data.confidence} confidence)` : ""}`);
-        }
-
-        if (d.myTurn) {
+        if (r.analyze) {
+          await suggest(r.analyze);
+        } else if (r.repeat && r.state.fen) {
           const current = suggestionRef.current;
-          if (changed || !current || current.fen !== d.fen) {
-            await suggest(d.fen);
-          } else if (trigger === "manual") {
-            await say(current.spoken);
-          }
-        } else if (changed) {
-          setSuggestion(null);
+          if (current && current.fen === r.state.fen) await say(current.spoken);
+          else await suggest(r.state.fen);
         }
       } catch (e) {
         addLog("error", e instanceof Error ? e.message : String(e));
@@ -329,7 +304,7 @@ export default function Coach() {
         }
       }
     },
-    [addLog, idlePhase, say, setGame, suggest],
+    [addLog, idlePhase, say, setTracker, suggest],
   );
   useEffect(() => {
     readBoardRef.current = readBoard;
@@ -358,7 +333,8 @@ export default function Coach() {
       }
       if (now - stableSince < STABLE_MS) return;
       if (busyRef.current) return;
-      if (now - lastReqAtRef.current < prefsRef.current.minGap * 1000) return;
+      const gap = fastRecheckRef.current ? CONFIRM_GAP_MS : prefsRef.current.minGap * 1000;
+      if (now - lastReqAtRef.current < gap) return;
       const last = lastReadSigRef.current;
       if (!recheckRef.current && last && changedFraction(sig, last) < CHANGE_MIN) return;
       void readBoard("auto");
@@ -462,11 +438,11 @@ export default function Coach() {
 
   const resetGame = () => {
     seqRef.current++;
-    setGame(null);
-    setSeen(null);
+    setTracker(NEW_GAME);
     setSuggestion(null);
     setLastMove(null);
-    pendingUnknownRef.current = null;
+    recheckRef.current = false;
+    fastRecheckRef.current = false;
     lastReadSigRef.current = null;
     addLog("info", "Game reset. Next read starts fresh.");
   };
@@ -477,8 +453,7 @@ export default function Coach() {
       addLog("warn", "That FEN isn't valid");
       return;
     }
-    setGame(fen);
-    setSeen(placementOf(fen));
+    setTracker({ ...NEW_GAME, fen });
     setLastMove(null);
     addLog("info", `Loaded FEN (${turnOf(fen) === "w" ? "White" : "Black"} to move)`);
     await suggest(fen);
@@ -487,7 +462,7 @@ export default function Coach() {
 
   // ---------- render ----------
 
-  const placement = gameFen ? placementOf(gameFen) : seen;
+  const placement = gameFen ? placementOf(gameFen) : null;
   const myTurn = gameFen ? turnOf(gameFen) === prefs.viewer : null;
 
   return (
@@ -689,7 +664,7 @@ export default function Coach() {
               <Button onClick={resetGame}>New game</Button>
             </div>
             <details className="pt-1">
-              <summary className="cursor-pointer text-xs text-zinc-500">Debug: analyse a FEN</summary>
+              <summary className="cursor-pointer text-xs text-zinc-500">Advanced: analyse a FEN, access token</summary>
               <div className="mt-2 flex gap-2">
                 <input
                   value={fenInput}
@@ -703,6 +678,16 @@ export default function Coach() {
                 </Button>
               </div>
               {gameFen && <p className="mt-2 break-all font-mono text-[11px] text-zinc-500">{gameFen}</p>}
+              <label className="mt-3 block text-xs text-zinc-500">
+                Server access token (only if the server sets APP_TOKEN)
+                <input
+                  type="password"
+                  value={prefs.token}
+                  onChange={(e) => set("token", e.target.value)}
+                  className="mt-1 w-full rounded-md bg-zinc-800 px-2 py-1 font-mono text-xs text-zinc-200"
+                  autoComplete="off"
+                />
+              </label>
             </details>
           </div>
         </aside>

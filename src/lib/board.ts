@@ -314,3 +314,159 @@ export function pvToSan(fen: string, pv: string[], max = 6): string[] {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Occupancy tracking: once the game is being followed, the camera only has to
+// say which squares hold a light piece, a dark piece, or nothing. That's far
+// easier to read from a blurry photo than telling a knight from a bishop, and
+// the legal-move list fills in the rest.
+// ---------------------------------------------------------------------------
+
+/** 64 chars in FEN order (a8..h8, a7..h7, ..., a1..h1): "W" light, "B" dark, "." empty. */
+export type Occupancy = string;
+
+export function occupancyOf(placement: string): Occupancy {
+  return placementToRanks(placement)
+    .join("")
+    .replace(/[PNBRQK]/g, "W")
+    .replace(/[pnbrqk]/g, "B");
+}
+
+/** Clean one occupancy row: W/B (any case) for pieces, ".", "-", "_", "0" or digits for empty. */
+export function normalizeOccupancyRow(row: string): string | null {
+  let out = "";
+  for (const ch of row.replace(/\s+/g, "")) {
+    if (ch === "W" || ch === "w") out += "W";
+    else if (ch === "B" || ch === "b") out += "B";
+    else if (ch >= "1" && ch <= "8") out += ".".repeat(Number(ch));
+    else if (ch === "." || ch === "-" || ch === "_" || ch === "0") out += ".";
+    else if (ch === "," || ch === "'" || ch === '"') continue;
+    else return null;
+  }
+  return out;
+}
+
+export type OccupancyResult = { ok: true; occupancy: Occupancy } | { ok: false; error: string };
+
+/** Same orientation rules as rowsToPlacement, for W/B/. rows. */
+export function rowsToOccupancy(rows: string[], viewer: Side, rotated = false): OccupancyResult {
+  if (rows.length !== 8) return { ok: false, error: `expected 8 rows, got ${rows.length}` };
+  const clean: string[] = [];
+  for (let i = 0; i < 8; i++) {
+    const r = normalizeOccupancyRow(rows[i]);
+    if (r === null) return { ok: false, error: `row ${i + 1} has unexpected characters` };
+    if (r.length !== 8) return { ok: false, error: `row ${i + 1} has ${r.length} squares` };
+    clean.push(r);
+  }
+  const nearIsWhite = (viewer === "w") !== rotated;
+  const ranks = nearIsWhite
+    ? clean
+    : clean
+        .slice()
+        .reverse()
+        .map((r) => r.split("").reverse().join(""));
+  const occupancy = ranks.join("");
+  const whites = occupancy.split("W").length - 1;
+  const blacks = occupancy.split("B").length - 1;
+  if (whites === 0 || blacks === 0 || whites > 16 || blacks > 16) {
+    return { ok: false, error: `implausible piece count (${whites} light, ${blacks} dark)` };
+  }
+  return { ok: true, occupancy };
+}
+
+function hamming(a: string, b: string): number {
+  let d = 0;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
+  return d;
+}
+
+export type OccupancyMatch =
+  | { kind: "same"; distance: number }
+  | { kind: "moved"; moves: Move[]; fen: string; lastMover: Side; distance: number; key: string }
+  | { kind: "nomatch"; reason: string };
+
+type Candidate = { occ: Occupancy; plies: number; moves: Move[]; fen: string; lastMover: Side | null };
+
+/** Each extra ply costs half a square, so "no move" beats "a move plus a misread" on a tie. */
+const PLY_PENALTY = 0.5;
+
+/**
+ * Find the game continuation (no move, one move by either side, or one move
+ * each) whose resulting occupancy best matches what the camera saw.
+ *
+ * Accepts the best candidate only if it's within `maxErrors` misread squares
+ * and clearly better (by a full square) than the next distinct candidate.
+ * Promotions to different pieces look identical, so those assume a queen.
+ */
+export function matchOccupancy(prevFen: string, seen: Occupancy, maxErrors = 2): OccupancyMatch {
+  const best = new Map<Occupancy, Candidate>();
+  const offer = (c: Candidate) => {
+    const prev = best.get(c.occ);
+    const isQueenPromo = (m: Move[]) => m.every((x) => !x.promotion || x.promotion === "q");
+    if (!prev || c.plies < prev.plies || (c.plies === prev.plies && !isQueenPromo(prev.moves) && isQueenPromo(c.moves))) {
+      best.set(c.occ, c);
+    }
+  };
+
+  offer({ occ: occupancyOf(placementOf(prevFen)), plies: 0, moves: [], fen: prevFen, lastMover: null });
+
+  const toMove = turnOf(prevFen);
+  const sides = [toMove, toMove === "w" ? "b" : "w"] as Side[];
+  for (const side of sides) {
+    const game = tryChess(withTurn(prevFen, side));
+    if (!game) continue;
+    for (const first of game.moves({ verbose: true })) {
+      game.move(first);
+      offer({ occ: occupancyOf(placementOf(game.fen())), plies: 1, moves: [first], fen: game.fen(), lastMover: side });
+      game.undo();
+    }
+  }
+
+  // Two-move sequences are ~30x more work. Skip them when "no move" or a
+  // single move already matches exactly: the observed board can only equal
+  // one occupancy, so every two-move sequence would be at least a square off
+  // plus its ply penalty, which can never win or tie.
+  if (!best.has(seen)) {
+    for (const side of sides) {
+      const game = tryChess(withTurn(prevFen, side));
+      if (!game) continue;
+      for (const first of game.moves({ verbose: true })) {
+        game.move(first);
+        for (const second of game.moves({ verbose: true })) {
+          game.move(second);
+          offer({
+            occ: occupancyOf(placementOf(game.fen())),
+            plies: 2,
+            moves: [first, second],
+            fen: game.fen(),
+            lastMover: side === "w" ? "b" : "w",
+          });
+          game.undo();
+        }
+        game.undo();
+      }
+    }
+  }
+
+  const scored = [...best.values()]
+    .map((c) => ({ c, distance: hamming(c.occ, seen), score: hamming(c.occ, seen) + c.plies * PLY_PENALTY }))
+    .sort((a, b) => a.score - b.score);
+
+  const top = scored[0];
+  const runnerUp = scored[1];
+  if (!top || top.distance > maxErrors) {
+    return { kind: "nomatch", reason: `no legal continuation fits (closest is ${top?.distance ?? "?"} squares off)` };
+  }
+  if (runnerUp && runnerUp.score - top.score < 1) {
+    return { kind: "nomatch", reason: "two different moves fit equally well" };
+  }
+  if (top.c.plies === 0) return { kind: "same", distance: top.distance };
+  return {
+    kind: "moved",
+    moves: top.c.moves,
+    fen: top.c.fen,
+    lastMover: top.c.lastMover!,
+    distance: top.distance,
+    key: `${top.c.moves.map((m) => m.lan).join(" ")}|${placementOf(top.c.fen)}`,
+  };
+}
