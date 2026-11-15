@@ -7,6 +7,7 @@ import {
   disableMockDeviceKit,
   enableMockDeviceKit,
   getRegistrationStateAsync,
+  handleUrl,
   mockDeviceDon,
   mockDevicePowerOn,
   mockDeviceSetCameraFeedFromCamera,
@@ -28,7 +29,7 @@ import {
   type StreamSessionError,
 } from "expo-meta-wearables-dat";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AppState } from "react-native";
+import { AppState, Linking } from "react-native";
 
 import { errorText } from "../api";
 import { deleteQuietly } from "../photo";
@@ -40,6 +41,8 @@ export type CapturedPhoto = PhotoData & {
 
 export type GlassesLog = (level: "info" | "warn" | "error", text: string) => void;
 
+/** Must match the plugin's urlScheme in app.json. */
+const URL_SCHEME = "irlengine";
 const CAPTURE_TIMEOUT_MS = 10_000;
 const SESSION_START_TIMEOUT_MS = 15_000;
 
@@ -157,6 +160,23 @@ export function useGlasses(log: GlassesLog) {
     return () => sub.remove();
   }, [refresh]);
 
+  // If iOS killed the app while the user was in Meta AI, the registration
+  // callback (irlengine://...) cold-launches it. The native URL hook then runs
+  // before JS has configured the SDK, so hand the launch URL to the SDK again
+  // once it is configured. An already-handled or unrelated URL is ignored.
+  const initialUrlHandledRef = useRef(false);
+  useEffect(() => {
+    if (!isConfigured || initialUrlHandledRef.current) return;
+    initialUrlHandledRef.current = true;
+    Linking.getInitialURL()
+      .then(async (url) => {
+        if (!url || !url.startsWith(`${URL_SCHEME}://`) || url.includes("expo-development-client")) return;
+        await handleUrl(url);
+        await refresh();
+      })
+      .catch(() => {});
+  }, [isConfigured, refresh]);
+
   const connected = useMemo(
     () => devices.some((d) => (linkStates[d.identifier] ?? d.linkState) === "connected"),
     [devices, linkStates],
@@ -216,7 +236,7 @@ export function useGlasses(log: GlassesLog) {
   }, []);
 
   /** createSession -> startSession -> addStreamToSession. Photos need the stream. */
-  const startStream = useCallback(
+  const startStreamOnce = useCallback(
     async (resolution: StreamingResolution) => {
       if (sessionRef.current) return;
       if (!isConfigured) throw new Error("Glasses SDK is still starting.");
@@ -254,6 +274,24 @@ export function useGlasses(log: GlassesLog) {
       }
     },
     [isConfigured, waitForSessionStarted],
+  );
+
+  /**
+   * Single-flight: a second call while one is starting (e.g. the app was
+   * backgrounded while Meta AI asked for permission, then resumed) shares the
+   * first call's promise instead of creating a second session.
+   */
+  const startPromiseRef = useRef<Promise<void> | null>(null);
+  const startStream = useCallback(
+    (resolution: StreamingResolution): Promise<void> => {
+      if (startPromiseRef.current) return startPromiseRef.current;
+      const p = startStreamOnce(resolution).finally(() => {
+        startPromiseRef.current = null;
+      });
+      startPromiseRef.current = p;
+      return p;
+    },
+    [startStreamOnce],
   );
 
   const stopStream = useCallback(async () => {
