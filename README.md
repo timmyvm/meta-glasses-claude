@@ -32,8 +32,8 @@ Open http://localhost:3000 in Chrome. Without the glasses you can test with **Us
 
 1. **Laptop:** sign in to WhatsApp Desktop (or Messenger) with a second account, so the glasses can call it.
 2. **Glasses:** start a video call to that account ("Hey Meta, video call …") and switch the call to the glasses camera (double-press the capture button, or use the switch-camera button in the call on your phone).
-3. **Laptop:** answer the call, then in this app click **Share call window** and pick the WhatsApp/Messenger window.
-4. **Drag on the video** to crop roughly around the board. That gets rid of call UI and self-view, and the board reads better.
+3. **Laptop:** answer the call, then in this app click **Share call window**. In the picker, choose the **Window** tab and pick the WhatsApp/Messenger window, not "Entire screen". With the whole screen, the call video is a tiny part of a huge frame.
+4. **Drag a box around the glasses video** inside the shared window. The crop comes from the full-resolution capture, so the board gets far more detail, and the call buttons and self-view are left out.
 5. Choose **I'm playing White/Black**. The app assumes you sit behind your own pieces.
 
 Keep this browser window visible on screen (side by side with the call is fine). Chrome slows down hidden tabs.

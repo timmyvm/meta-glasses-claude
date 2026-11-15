@@ -120,6 +120,7 @@ export default function Coach() {
   const pendingUnknownRef = useRef<string | null>(null);
   const recheckRef = useRef(false); // let auto-watch re-read even if the picture hasn't changed
   const queuedManualRef = useRef(false);
+  const cropTipShownRef = useRef(false);
   const readBoardRef = useRef<(trigger: "auto" | "manual") => Promise<void>>(async () => {});
   const suggestionRef = useRef<Suggestion | null>(null);
 
@@ -261,7 +262,14 @@ export default function Coach() {
         }
         setLastRead({ ms: data.ms, confidence: data.confidence, model: data.model });
         if (!data.visible) {
-          if (trigger === "manual") addLog("info", `Can't see the board clearly${data.notes ? `: ${data.notes}` : ""}`);
+          // Auto reads fail quietly (hands and head turns are normal), except
+          // for one nudge to crop when no crop box is set.
+          const nudge = !roiRef.current && !cropTipShownRef.current;
+          if (trigger === "manual" || nudge) {
+            if (nudge) cropTipShownRef.current = true;
+            const tip = roiRef.current ? "" : " Tip: drag a box around the glasses video so Claude gets a close-up.";
+            addLog("info", `Can't see the board clearly${data.notes ? `: ${data.notes.replace(/\.\s*$/, "")}` : ""}.${tip}`);
+          }
           return;
         }
 
@@ -389,22 +397,32 @@ export default function Coach() {
     });
     setImageUrl(null);
     setStream(next);
+    cropTipShownRef.current = false;
   };
 
   const shareWindow = async () => {
     try {
-      // Ask for as many pixels as the window has; the browser never upscales,
-      // so this just stops it from capturing at a reduced size.
+      // No width/height constraints: the browser then captures the window at
+      // its real size. (Asking for 4K can make it pad a small window up to 4K,
+      // which shrinks the board when the frame is sent.)
       const s = await navigator.mediaDevices.getDisplayMedia({
-        video: { width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 15 } },
+        video: { displaySurface: "window", frameRate: { ideal: 15 } },
         audio: false,
-      });
+        selfBrowserSurface: "exclude",
+      } as DisplayMediaStreamOptions);
       const track = s.getVideoTracks()[0];
       if (track) track.contentHint = "detail";
       attach(s);
-      const { width, height } = track?.getSettings() ?? {};
-      addLog("info", `Sharing the call window${width && height ? ` at ${width}×${height}` : ""}. Drag on the video to crop to the board.`);
-      if (width && height && Math.min(width, height) < 600) {
+      const { width, height, displaySurface } = (track?.getSettings() ?? {}) as MediaTrackSettings & {
+        displaySurface?: string;
+      };
+      addLog("info", `Sharing${width && height ? ` at ${width}×${height}` : ""}. Now drag a box around the glasses video.`);
+      if (displaySurface === "monitor") {
+        addLog(
+          "warn",
+          "You shared your whole screen, so the call video is a small part of it. Share just the WhatsApp window, or at least drag a tight box around the glasses video.",
+        );
+      } else if (width && height && Math.min(width, height) < 600) {
         addLog("warn", "That's a small capture. Make the call window bigger for a sharper board.");
       }
     } catch (e) {
