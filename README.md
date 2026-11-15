@@ -40,7 +40,7 @@ Keep this browser window visible on screen (side by side with the call is fine).
 
 ### Sharp, uncropped picture
 
-The app captures the call window exactly as it looks on screen. The badge in the corner of the video shows the capture size; it turns amber below 600px.
+The app captures the call window exactly as it looks on screen. The badge in the corner of the video shows the capture size; it turns amber below 600px. The crop box shows how many real pixels it covers, which is the detail Claude actually gets; under 300px it turns amber. Small crops are enlarged to 1024px before sending, so the model has more image to look at per square, but that can't add detail the video never had.
 
 - **Make the call window tall and narrow.** The glasses send portrait video. In a wide window, WhatsApp zooms in to fill it and cuts off the top and bottom, so you lose field of view. A portrait-shaped window shows the whole frame.
 - **Make it as big as you can.** The capture is only as big as the window, so put the call window full height on screen and the app side by side with it (or on a second monitor).

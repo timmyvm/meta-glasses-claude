@@ -126,10 +126,25 @@ export function VideoPanel({ stream, imageUrl, roi, onRoiChange, onElement, over
               width: `${shown.w * 100}%`,
               height: `${shown.h * 100}%`,
             }}
-          />
+          >
+            {size && <CropSize w={Math.round(shown.w * size.w)} h={Math.round(shown.h * size.h)} />}
+          </div>
         )}
         {overlay}
       </div>
     </div>
+  );
+}
+
+/** Real source pixels inside the crop box: this is the detail Claude gets. */
+function CropSize({ w, h }: { w: number; h: number }) {
+  const small = Math.min(w, h) < 300;
+  return (
+    <span
+      className={`absolute left-0 top-0 whitespace-nowrap rounded-br-md px-1.5 py-0.5 font-mono text-[10px] ${small ? "bg-amber-400 text-amber-950" : "bg-emerald-400 text-emerald-950"}`}
+      data-testid="crop-size"
+    >
+      {w}×{h}px{small ? " · tiny, make the call video bigger" : ""}
+    </span>
   );
 }

@@ -28,19 +28,32 @@ function cropRect(src: FrameSource, roi: Roi | null) {
 }
 
 /**
- * Grab the current frame (cropped to the ROI) as a base64 JPEG, scaled so its
- * long side is at most `maxSide` pixels. Current Claude models read up to
- * 2576px; 1920 caps the image-token cost and is already more detail than a
- * video call carries, so in practice frames go out at native resolution.
+ * Scale factor for a crop of `sw` x `sh` source pixels: shrink anything whose
+ * long side is over `maxSide`, enlarge anything under `minLong`.
+ *
+ * Enlarging adds no real detail, but Claude sees an image in patches of
+ * roughly 28px. A 200px-wide board would get under one patch per square, so
+ * blowing it up gives the model room to look at each square.
+ */
+export function cropScale(sw: number, sh: number, maxSide = 1920, minLong = 1024): number {
+  const long = Math.max(sw, sh);
+  if (long > maxSide) return maxSide / long;
+  if (long < minLong) return minLong / long;
+  return 1;
+}
+
+/**
+ * Grab the current frame (cropped to the ROI) as a base64 JPEG, sized with
+ * `cropScale`. Current Claude models read up to 2576px; 1920 caps the
+ * image-token cost and is already more detail than a video call carries.
  */
 export function grabJpeg(
   src: FrameSource,
   roi: Roi | null,
-  maxSide = 1920,
   quality = 0.9,
-): { base64: string; width: number; height: number } {
+): { base64: string; width: number; height: number; cropWidth: number; cropHeight: number } {
   const { sx, sy, sw, sh } = cropRect(src, roi);
-  const scale = Math.min(1, maxSide / Math.max(sw, sh));
+  const scale = cropScale(sw, sh);
   const width = Math.round(sw * scale);
   const height = Math.round(sh * scale);
   const canvas = document.createElement("canvas");
@@ -48,9 +61,11 @@ export function grabJpeg(
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("canvas 2d context unavailable");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
   ctx.drawImage(src, sx, sy, sw, sh, 0, 0, width, height);
   const dataUrl = canvas.toDataURL("image/jpeg", quality);
-  return { base64: dataUrl.slice(dataUrl.indexOf(",") + 1), width, height };
+  return { base64: dataUrl.slice(dataUrl.indexOf(",") + 1), width, height, cropWidth: sw, cropHeight: sh };
 }
 
 const SIG_W = 64;
