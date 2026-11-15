@@ -83,7 +83,7 @@ Use **Test voice** to check that you hear "Knight F3" through the glasses.
 | Min gap | Minimum seconds between automatic reads. Each read is one API call, so this caps cost. |
 | Board looks flipped | Use this if reads come out upside down (for example, you're watching from the other side). |
 
-**Cost and speed:** each read is one image plus a short reply, so expect a few cents per read with the default model (`claude-opus-5-5`). Reads take a few seconds. For faster or cheaper reads, set `CLAUDE_MODEL` in `.env.local` (for example `claude-sonnet-5-5`). The API route also enables Claude's server-side fallback: if the model declines a request, it retries on a fallback model.
+**Cost and speed:** the default model is Claude Haiku 5.5, which costs roughly a tenth of a cent per read (about 5–10¢ for a whole game) and answers quickly. It's accurate on clear photos. If your shots are blurry or cluttered, set `CLAUDE_MODEL` in `.env.local` to `claude-sonnet-5-5` or `claude-opus-5-5`: they read harder images better but cost roughly 20–40× more per read. On models that support it, the API route also turns on Claude's server-side fallback: if the model declines a request, it retries on a fallback model.
 
 ## Code map
 

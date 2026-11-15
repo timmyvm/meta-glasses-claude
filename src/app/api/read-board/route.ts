@@ -3,8 +3,10 @@ import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 import type { ReadBoardRequest, ReadBoardResponse } from "@/lib/api-types";
 
-// Override with CLAUDE_MODEL in .env.local if you want to trade accuracy for speed.
-const MODEL = process.env.CLAUDE_MODEL || "claude-opus-5-5";
+// Haiku is fast and costs about a tenth of a cent per read, which is plenty
+// for clear photos. For blurry or cluttered shots, set CLAUDE_MODEL in
+// .env.local to claude-sonnet-5-5 or claude-opus-5-5 (slower, pricier, sharper).
+const MODEL = process.env.CLAUDE_MODEL || "claude-haiku-5-5";
 
 // Created lazily so a missing key surfaces as a request error, not a build error.
 let client: Anthropic | null = null;
@@ -65,6 +67,7 @@ export async function POST(req: Request): Promise<Response> {
       // Opus 5.5 always thinks; effort sets how hard. "low" is fastest.
       output_config: { effort, format: betaZodOutputFormat(BoardRead) },
       // If the model declines a request, retry on its default fallback model.
+      // Models without a fallback (like Haiku) simply run on their own.
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
       system: SYSTEM,
