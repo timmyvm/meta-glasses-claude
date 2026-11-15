@@ -29,14 +29,15 @@ function cropRect(src: FrameSource, roi: Roi | null) {
 
 /**
  * Grab the current frame (cropped to the ROI) as a base64 JPEG, scaled so its
- * long side is at most `maxSide` pixels. Smaller images = fewer tokens and
- * faster reads; ~1280px keeps piece detail legible.
+ * long side is at most `maxSide` pixels. Current Claude models read up to
+ * 2576px; 1920 caps the image-token cost and is already more detail than a
+ * video call carries, so in practice frames go out at native resolution.
  */
 export function grabJpeg(
   src: FrameSource,
   roi: Roi | null,
-  maxSide = 1280,
-  quality = 0.85,
+  maxSide = 1920,
+  quality = 0.9,
 ): { base64: string; width: number; height: number } {
   const { sx, sy, sw, sh } = cropRect(src, roi);
   const scale = Math.min(1, maxSide / Math.max(sw, sh));

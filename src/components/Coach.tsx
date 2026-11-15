@@ -393,9 +393,20 @@ export default function Coach() {
 
   const shareWindow = async () => {
     try {
-      const s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false });
+      // Ask for as many pixels as the window has; the browser never upscales,
+      // so this just stops it from capturing at a reduced size.
+      const s = await navigator.mediaDevices.getDisplayMedia({
+        video: { width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 15 } },
+        audio: false,
+      });
+      const track = s.getVideoTracks()[0];
+      if (track) track.contentHint = "detail";
       attach(s);
-      addLog("info", "Sharing the call window. Drag on the video to crop to the board.");
+      const { width, height } = track?.getSettings() ?? {};
+      addLog("info", `Sharing the call window${width && height ? ` at ${width}×${height}` : ""}. Drag on the video to crop to the board.`);
+      if (width && height && Math.min(width, height) < 600) {
+        addLog("warn", "That's a small capture. Make the call window bigger for a sharper board.");
+      }
     } catch (e) {
       addLog("warn", `Screen share cancelled: ${e instanceof Error ? e.message : String(e)}`);
     }

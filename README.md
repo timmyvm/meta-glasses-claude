@@ -38,6 +38,17 @@ Open http://localhost:3000 in Chrome. Without the glasses you can test with **Us
 
 Keep this browser window visible on screen (side by side with the call is fine). Chrome slows down hidden tabs.
 
+### Sharp, uncropped picture
+
+The app captures the call window exactly as it looks on screen. The badge in the corner of the video shows the capture size; it turns amber below 600px.
+
+- **Make the call window tall and narrow.** The glasses send portrait video. In a wide window, WhatsApp zooms in to fill it and cuts off the top and bottom, so you lose field of view. A portrait-shaped window shows the whole frame.
+- **Make it as big as you can.** The capture is only as big as the window, so put the call window full height on screen and the app side by side with it (or on a second monitor).
+- **Use a strong connection.** WhatsApp lowers video quality when the phone's connection is weak, and the glasses stream through the phone. Strong Wi-Fi on both the phone and laptop helps.
+- **Look at the board from closer.** The board then fills more of the frame, and a tight crop around it gets more detail.
+
+Even at its best, call video is a lot softer than glasses photos. If boards still misread, set Read quality to **Careful**.
+
 ## Getting the voice into the call
 
 The app speaks with the browser's text-to-speech, so that audio has to reach the call's **microphone** on the laptop.
